@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Tree Chopping Game</title>
+  <style>
+    html, body {
+      margin: 0; 
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: #a0d8ef;
+      overflow: hidden;
+      user-select: none; /* aby sa neoznačovalo pri držaní myši */
+      touch-action: none; /* Pre lepšiu podporu mobilov */
+    }
+    #gameCanvas {
+      background: #a0d8ef;
+      width: 95vw;   /* 95% viewport šírky */
+      height: 95vh;  /* 95% viewport výšky */
+      display: block;
+      border: 2px solid #333;
+      box-sizing: border-box;
+    }
+    #inventory {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(255, 255, 255, 0.9);
+      color: #8B4513;
+      padding: 15px 25px;
+      font-family: 'Arial', sans-serif;
+      font-size: 24px;
+      border-radius: 12px;
+      z-index: 10;
+      user-select: none;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #inventory::before {
+      content: '🪵';
+      font-size: 28px;
+    }
+    #shop {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(255, 255, 255, 0.95);
+      padding: 20px;
+      border-radius: 15px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.3);
+      z-index: 100;
+      min-width: 300px;
+    }
+    #shop h2 {
+      color: #8B4513;
+      text-align: center;
+      margin-top: 0;
+    }
+    .axe-option {
+      background: #f5f5f5;
+      padding: 15px;
+      margin: 10px 0;
+      border-radius: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .axe-option button {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .axe-option button:disabled {
+      background: #cccccc;
+      cursor: not-allowed;
+    }
+    .axe-info {
+      flex-grow: 1;
+      margin-right: 15px;
+    }
+    .close-shop {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: #666;
+    }
+    #mobile-controls {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 20px;
+      z-index: 100;
+      display: none; /* Predvolene skryté, zobrazia sa len na mobile */
+    }
+    
+    .control-btn {
+      width: 70px;
+      height: 70px;
+      background-color: rgba(255, 255, 255, 0.7);
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 24px;
+      font-weight: bold;
+      border: 3px solid #333;
+      user-select: none;
+      touch-action: none;
+    }
+    
+    #chop-btn {
+      background-color: rgba(255, 80, 80, 0.8);
+      font-size: 30px;
+    }
+    
+    /* Responzívny dizajn */
+    @media (max-width: 768px) {
+      #mobile-controls {
+        display: flex;
+      }
+      
+      #inventory {
+        top: 10px;
+        right: 10px;
+        font-size: 18px;
+        padding: 8px 15px;
+      }
+      
+      .axe-option {
+        padding: 10px;
+        margin: 8px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="inventory">Wood: 0</div>
+  <div id="shop">
+    <button class="close-shop" onclick="toggleShop(false)">×</button>
+    <h2>Blacksmith's Shop</h2>
+    <div id="axe-list"></div>
+  </div>
+  <div id="mobile-controls">
+    <div class="control-btn" id="left-btn">←</div>
+    <div class="control-btn" id="up-btn">↑</div>
+    <div class="control-btn" id="down-btn">↓</div>
+    <div class="control-btn" id="right-btn">→</div>
+    <div class="control-btn" id="chop-btn">🪓</div>
+  </div>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const inventoryDiv = document.getElementById('inventory');
+    const shopDiv = document.getElementById('shop');
+    const axeListDiv = document.getElementById('axe-list');
+
+    // Dynamicky nastavíme veľkosť plátna podľa CSS rozmerov
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    // Počkáme chvíľu, aby sa CSS stihlo aplikovať a potom vykreslíme
+    setTimeout(() => {
+      resizeCanvas();
+      draw();
+      
+      // Zabránenie skrolovaniu na mobilných zariadeniach
+      document.addEventListener('touchmove', function (e) {
+        e.preventDefault();
+      }, { passive: false });
+    }, 100);
+
+    const world = {
+      width: 3000,
+      height: 2000
+    };
+
+    const treeSize = 40;
+    const trunkSize = 20;
+
+    const axes = [
+      { level: 1, chopTime: 3000, range: treeSize + 40, price: 0, owned: true },
+      { level: 2, chopTime: 2000, range: treeSize + 60, price: 15, owned: false },
+      { level: 3, chopTime: 1000, range: treeSize + 80, price: 25, owned: false },
+      { level: 4, chopTime: 500, range: treeSize + 100, price: 100, owned: false }
+    ];
+
+    const smithy = {
+      x: world.width / 2,
+      y: world.height / 2,
+      size: 80,
+      color: '#8B4513'
+    };
+
+    const player = {
+      x: world.width / 2 + 100, // Posunieme hráča vedľa kováčskej dielne
+      y: world.height / 2,
+      size: 40,
+      speed: 3,
+      currentAxe: axes[0]
+    };
+
+    const trees = [];
+    const stumps = []; // Array to store stumps
+    const stumpDuration = 20000; // How long stumps remain (20 seconds)
+    const maxTrees = 100;
+    const treesPerCluster = 8 + Math.floor(Math.random() * 5);
+    let wood = 0;
+    let keys = {};
+    let chopping = null;
+    let chopStart = 0;
+
+    function createTree(x, y) {
+      return {
+        x: x,
+        y: y,
+        shaking: false,
+        // Random tree colors for variation
+        leafColor: `rgb(${30 + Math.random() * 20}, ${100 + Math.random() * 30}, ${30 + Math.random() * 20})`,
+        trunkColor: `rgb(${100 + Math.random() * 30}, ${60 + Math.random() * 20}, ${20 + Math.random() * 20})`
+      };
+    }
+
+    function createStump(x, y, createdAt) {
+      return {
+        x: x,
+        y: y,
+        createdAt: createdAt,
+        color: `rgb(${90 + Math.random() * 20}, ${50 + Math.random() * 15}, ${20 + Math.random() * 10})`
+      };
+    }
+
+    function isTreeTooClose(newTree) {
+      return trees.some(t => {
+        const dx = t.x - newTree.x;
+        const dy = t.y - newTree.y;
+        const minDistance = treeSize * 1.2; // Allow trees to be closer but not overlap
+        return Math.hypot(dx, dy) < minDistance;
+      });
+    }
+
+    function createInitialForest() {
+      // Create dense forest clusters around player
+      const numInitialClusters = 8;
+      for (let i = 0; i < numInitialClusters; i++) {
+        const angle = (i / numInitialClusters) * Math.PI * 2;
+        const distance = 200 + Math.random() * 300; // Random distance 200-500 from player
+        const x = player.x + Math.cos(angle) * distance;
+        const y = player.y + Math.sin(angle) * distance;
+        spawnTreeCluster(x, y, treesPerCluster);
+      }
+
+      // Fill rest of the world with random clusters
+      while (trees.length < maxTrees) {
+        spawnTreeCluster(
+          Math.random() * world.width,
+          Math.random() * world.height,
+          treesPerCluster
+        );
+      }
+    }
+
+    function isPositionVisible(x, y) {
+      const visibleLeft = player.x - canvas.width / 2;
+      const visibleRight = player.x + canvas.width / 2;
+      const visibleTop = player.y - canvas.height / 2;
+      const visibleBottom = player.y + canvas.height / 2;
+      
+      return x >= visibleLeft && x <= visibleRight && y >= visibleTop && y <= visibleBottom;
+    }
+
+    function spawnTreeCluster(centerX, centerY, count = treesPerCluster) {
+      let attempts = 0;
+      const maxAttempts = 50;
+
+      while (attempts < maxAttempts && trees.length < maxTrees) {
+        // Try a new position if the center point is in visible area
+        if (isPositionVisible(centerX, centerY)) {
+          const angle = Math.random() * Math.PI * 2;
+          const distance = canvas.width;
+          centerX = player.x + Math.cos(angle) * distance;
+          centerY = player.y + Math.sin(angle) * distance;
+        }
+
+        // Create a more natural forest pattern
+        for (let i = 0; i < count; i++) {
+          let tries = 0;
+          while (tries < 20) {
+            // Use more natural forest distribution
+            const r = Math.random() < 0.7 
+              ? Math.sqrt(Math.random()) * 100  // 70% closer trees for dense areas
+              : Math.sqrt(Math.random()) * 200; // 30% further trees for clearings
+            const angle = Math.random() * Math.PI * 2;
+            const offsetX = Math.cos(angle) * r + (Math.random() - 0.5) * 30; // Add small random offset
+            const offsetY = Math.sin(angle) * r + (Math.random() - 0.5) * 30;
+            const tx = centerX + offsetX;
+            const ty = centerY + offsetY;
+            
+            if (tx > 0 && tx < world.width && ty > 0 && ty < world.height && 
+               (!isPositionVisible(tx, ty) || trees.length < maxTrees * 0.2)) { // Allow some initial trees in view
+              const newTree = createTree(tx, ty);
+              if (!isTreeTooClose(newTree)) {
+                trees.push(newTree);
+                break;
+              }
+            }
+            tries++;
+          }
+        }
+        attempts++;
+      }
+    }
+
+    // Initialize the forest
+    createInitialForest();
+    
+    // Zisťovanie, či používame mobilné zariadenie
+    const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
+    // Klávesnica pre desktopový prehliadač
+    document.addEventListener('keydown', e => keys[e.key] = true);
+    document.addEventListener('keyup', e => keys[e.key] = false);
+    
+    // Kontroly pre mobilné zariadenia
+    function setupMobileControls() {
+      const leftBtn = document.getElementById('left-btn');
+      const rightBtn = document.getElementById('right-btn');
+      const upBtn = document.getElementById('up-btn');
+      const downBtn = document.getElementById('down-btn');
+      const chopBtn = document.getElementById('chop-btn');
+      
+      // Pomocná funkcia pre dotykové udalosti
+      function handleTouch(element, keyToEmulate, startEvent, endEvent) {
+        element.addEventListener(startEvent, (e) => {
+          e.preventDefault();
+          keys[keyToEmulate] = true;
+        });
+        element.addEventListener(endEvent, (e) => {
+          e.preventDefault();
+          keys[keyToEmulate] = false;
+        });
+        element.addEventListener('touchcancel', (e) => {
+          e.preventDefault();
+          keys[keyToEmulate] = false;
+        });
+      }
+      
+      // Ovládanie pohybu
+      handleTouch(leftBtn, 'a', 'touchstart', 'touchend');
+      handleTouch(rightBtn, 'd', 'touchstart', 'touchend');
+      handleTouch(upBtn, 'w', 'touchstart', 'touchend');
+      handleTouch(downBtn, 's', 'touchstart', 'touchend');
+      
+      // Tlačidlo na sekanie
+      chopBtn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        startChopping();
+      });
+      
+      chopBtn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        stopChopping();
+      });
+    }
+    
+    // Funkcie na sekanie
+    function startChopping() {
+      for (let i = 0; i < trees.length; i++) {
+        const t = trees[i];
+        const dx = player.x - t.x;
+        const dy = player.y - t.y;
+        if (Math.hypot(dx, dy) < player.currentAxe.range) {
+          chopping = i;
+          chopStart = performance.now();
+          trees[i].shaking = true;
+          break;
+        }
+      }
+    }
+    
+    function stopChopping() {
+      if (chopping !== null) {
+        trees[chopping].shaking = false;
+        chopping = null;
+      }
+    }
+    
+    // Nastavenie mobilných kontrol ak sme na mobile
+    if (isMobileDevice) {
+      setupMobileControls();
+    }
+
+    canvas.addEventListener('mousedown', e => {
+      if (isNearSmithy()) {
+        toggleShop(true);
+        return;
+      }
+
+      startChopping();
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      stopChopping();
+    });
+    
+    // Pridané pre dotykové ovládanie
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (isNearSmithy()) {
+        toggleShop(true);
+        return;
+      }
+      
+      // Na mobiloch - len ak nemáme mobilné kontroly
+      if (!isMobileDevice) {
+        startChopping();
+      }
+    });
+    
+    canvas.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      if (!isMobileDevice) {
+        stopChopping();
+      }
+    });
+
+    function checkTreeCollision(x, y) {
+      return trees.some(tree => {
+        const dx = x - tree.x;
+        const dy = y - tree.y + treeSize/2; // Adjust for visual center of tree
+        return Math.hypot(dx, dy) < (player.size / 2 + trunkSize);
+      });
+    }
+
+    function update(deltaTime) {
+      let newX = player.x;
+      let newY = player.y;
+
+      // Update walking animation
+      isWalking = false;
+      let directionX = 0;
+      let directionY = 0;
+      let prevX = player.x;
+      
+      if (keys['ArrowUp'] || keys['w']) { newY -= player.speed; isWalking = true; directionY -= 1; }
+      if (keys['ArrowDown'] || keys['s']) { newY += player.speed; isWalking = true; directionY += 1; }
+      if (keys['ArrowLeft'] || keys['a']) { newX -= player.speed; isWalking = true; directionX -= 1; }
+      if (keys['ArrowRight'] || keys['d']) { newX += player.speed; isWalking = true; directionX += 1; }
+      
+      // Update player facing direction only if moving horizontally
+      if (directionX < 0) {
+        playerFacingLeft = true;
+      } else if (directionX > 0) {
+        playerFacingLeft = false;
+      }
+      // Do not change direction when moving purely vertically
+
+      // Update walk animation frame - symetrický pohyb
+      if (isWalking && performance.now() - lastWalkUpdate > walkUpdateInterval) {
+        walkFrame = (walkFrame + 1) % 4;
+        lastWalkUpdate = performance.now();
+      }
+      
+      // Calculate player facing angle
+      if (isWalking && (directionX !== 0 || directionY !== 0)) {
+        playerAngle = Math.atan2(directionY, directionX);
+      }
+
+      // Check collisions for X and Y movements separately to allow sliding along trees
+      if (!checkTreeCollision(newX, player.y)) {
+        player.x = newX;
+      }
+      if (!checkTreeCollision(player.x, newY)) {
+        player.y = newY;
+      }
+
+      // Keep player in world bounds
+      player.x = Math.max(0, Math.min(world.width, player.x));
+      player.y = Math.max(0, Math.min(world.height, player.y));
+
+      if (chopping !== null) {
+        const now = performance.now();
+        if (now - chopStart >= player.currentAxe.chopTime) {
+          // Create a stump at the tree's location
+          const stump = createStump(trees[chopping].x, trees[chopping].y, now);
+          stumps.push(stump);
+
+          trees.splice(chopping, 1);
+          wood++;
+          inventoryDiv.textContent = `Wood: ${wood}`;
+          
+          // Spawn new cluster far from player to maintain tree count
+          const angle = Math.random() * Math.PI * 2;
+          const distance = canvas.width * 1.5; // Spawn far away
+          const newX = player.x + Math.cos(angle) * distance;
+          const newY = player.y + Math.sin(angle) * distance;
+          spawnTreeCluster(newX, newY, treesPerCluster);
+          chopping = null;
+        }
+      }
+
+      // Remove old stumps
+      const now = performance.now();
+      for (let i = stumps.length - 1; i >= 0; i--) {
+        if (now - stumps[i].createdAt > stumpDuration) {
+          stumps.splice(i, 1);
+        }
+      }
+    }
+
+    const playerSprites = {
+      idle: {
+        width: 48,
+        height: 48,
+        color: '#8B4513',
+        hatColor: '#654321',
+        shirtColor: '#2E5090',
+        pantsColor: '#1B3058'
+      }
+    };
+
+    const axeSprites = [
+      { // Level 1 - Basic axe
+        handleLength: 25,
+        handleWidth: 4,
+        handleColor: '#8B4513',
+        bladeColor: '#A8A8A8', 
+        bladeWidth: 12,
+        bladeHeight: 12,
+        edgeColor: '#D0D0D0',
+        edgeWidth: 1.5
+      },
+      { // Level 2 - Better axe
+        handleLength: 32,
+        handleWidth: 5,
+        handleColor: '#654321',
+        bladeColor: '#B0B0B0',
+        bladeWidth: 18,
+        bladeHeight: 18,
+        edgeColor: '#E0E0E0',
+        edgeWidth: 2
+      },
+      { // Level 3 - Advanced axe
+        handleLength: 40,
+        handleWidth: 6,
+        handleColor: '#4A3219',
+        bladeColor: '#C8C8C8',
+        bladeWidth: 26,
+        bladeHeight: 24,
+        edgeColor: '#F0F0F0',
+        edgeWidth: 3,
+        shinyEffect: true
+      },
+      { // Level 4 - Expert axe
+        handleLength: 50,
+        handleWidth: 7,
+        handleColor: '#2E1E0F',
+        bladeColor: '#E8E8E8',
+        bladeWidth: 36,
+        bladeHeight: 32,
+        edgeColor: '#FFFFFF',
+        edgeWidth: 4,
+        shinyEffect: true,
+        glowColor: 'rgba(255, 215, 0, 0.3)'
+      }
+    ];
+
+    let playerAngle = 0; // Uhol pre animáciu sekania
+    let isWalking = false;
+    let walkFrame = 0;
+    let lastWalkUpdate = 0;
+    const walkUpdateInterval = 100; // Rýchlosť animácie chôdze
+    let playerFacingLeft = false; // Smer hráča (dolava/doprava)
+
+    function drawPlayer(x, y) {
+      ctx.save();
+      ctx.translate(x, y);
+
+      // Draw player legs (simple rectangles for now)
+      ctx.fillStyle = playerSprites.idle.pantsColor;
+      ctx.fillRect(-10, 0, 20, 20);
+
+      // Draw player body
+      ctx.fillStyle = playerSprites.idle.shirtColor;
+      ctx.fillRect(-15, -20, 30, 20);
+
+      // Draw player head
+      ctx.fillStyle = playerSprites.idle.color;
+      ctx.beginPath();
+      ctx.arc(0, -40, 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Draw player hat
+      ctx.fillStyle = playerSprites.idle.hatColor;
+      ctx.beginPath();
+      ctx.arc(0, -45, 12, 0, Math.PI);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function drawAxe(x, y, angle, axeLevel) {
+      const sprite = axeSprites[axeLevel - 1];
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+
+      // Draw handle
+      ctx.fillStyle = sprite.handleColor;
+      ctx.fillRect(-sprite.handleWidth / 2, 0, sprite.handleWidth, sprite.handleLength);
+
+      // Draw realistic axe head
+      ctx.fillStyle = sprite.bladeColor;
+      ctx.beginPath();
+      
+      // Blade shape
+      ctx.moveTo(-sprite.handleWidth, sprite.handleLength*0.2);
+      ctx.lineTo(sprite.bladeWidth, 0);
+      ctx.lineTo(sprite.bladeWidth - sprite.bladeWidth*0.2, -sprite.bladeHeight);
+      ctx.lineTo(-sprite.handleWidth, -sprite.bladeHeight*0.5);
+      ctx.closePath();
+      ctx.fill();
+      
+      // Edge detail
+      ctx.fillStyle = sprite.edgeColor;
+      ctx.beginPath();
+      ctx.moveTo(sprite.bladeWidth - sprite.bladeWidth*0.1, -sprite.bladeHeight*0.1);
+      ctx.lineTo(sprite.bladeWidth, 0);
+      ctx.lineTo(sprite.bladeWidth - sprite.bladeWidth*0.2, -sprite.bladeHeight);
+      ctx.closePath();
+      ctx.fill();
+
+      // Add glow effect for level 4 axe
+      if (sprite.glowColor) {
+        ctx.shadowColor = sprite.glowColor;
+        ctx.shadowBlur = 15;
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    function draw() {
+      const cameraX = player.x - canvas.width / 2;
+      const cameraY = player.y - canvas.height / 2;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // draw stumps first (they're on the ground)
+      for (const stump of stumps) {
+        const screenX = stump.x - cameraX;
+        const screenY = stump.y - cameraY;
+        ctx.save();
+        ctx.translate(screenX, screenY);
+        
+        // Draw stump
+        ctx.beginPath();
+        ctx.fillStyle = stump.color;
+        ctx.ellipse(0, 0, trunkSize, trunkSize * 0.7, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.restore();
+      }
+
+      // draw trees
+      for (const t of trees) {
+        const screenX = t.x - cameraX;
+        const screenY = t.y - cameraY;
+        ctx.save();
+        ctx.translate(screenX, screenY);
+        
+        if (t.shaking) {
+          const shake = Math.sin(performance.now() / 50) * 3;
+          ctx.translate(shake, 0);
+        }
+
+        // Draw trunk
+        ctx.beginPath();
+        ctx.fillStyle = t.trunkColor;
+        ctx.ellipse(0, 0, trunkSize, trunkSize * 0.7, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw tree crown (leaves)
+        ctx.beginPath();
+        ctx.fillStyle = t.leafColor;
+        ctx.arc(0, -treeSize/2, treeSize * 0.8, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.restore();
+      }
+
+      // draw smithy
+      ctx.save();
+      ctx.translate(smithy.x - cameraX, smithy.y - cameraY);
+      
+      // Draw smithy building
+      ctx.fillStyle = smithy.color;
+      ctx.fillRect(-smithy.size/2, -smithy.size/2, smithy.size, smithy.size);
+      
+      // Draw roof
+      ctx.beginPath();
+      ctx.moveTo(-smithy.size/2 - 10, -smithy.size/2);
+      ctx.lineTo(0, -smithy.size/2 - 30);
+      ctx.lineTo(smithy.size/2 + 10, -smithy.size/2);
+      ctx.fillStyle = '#654321';
+      ctx.fill();
+      
+      // Draw door
+      ctx.fillStyle = '#432';
+      ctx.fillRect(-smithy.size/4, 0, smithy.size/2, smithy.size/2);
+      
+      // Draw anvil icon if player is near
+      if (isNearSmithy()) {
+        ctx.fillStyle = '#fff';
+        ctx.font = '20px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Press to Shop', 0, -smithy.size);
+      }
+      
+      ctx.restore();
+
+      // draw player
+      ctx.save();
+      ctx.translate(player.x - cameraX, player.y - cameraY);
+      
+      // Walking animation bounce
+      if (isWalking) {
+        const bounceHeight = Math.sin(walkFrame * Math.PI / 2) * 3;
+        ctx.translate(0, bounceHeight);
+      }
+
+      // Draw player body
+      const ps = playerSprites.idle;
+      
+      // Flip the player based on direction
+      if (playerFacingLeft) {
+        ctx.scale(-1, 1);
+      }
+      
+      // Legs
+      ctx.fillStyle = ps.pantsColor;
+      ctx.fillRect(-ps.width/4, 0, ps.width/6, ps.height/2); // Left leg
+      ctx.fillRect(ps.width/12, 0, ps.width/6, ps.height/2); // Right leg
+      
+      // Body
+      ctx.fillStyle = ps.shirtColor;
+      ctx.fillRect(-ps.width/3, -ps.height/2, ps.width*2/3, ps.height/2);
+      
+      // Head
+      ctx.fillStyle = ps.color;
+      ctx.beginPath();
+      ctx.arc(0, -ps.height/2 - ps.width/4, ps.width/4, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Hat
+      ctx.fillStyle = ps.hatColor;
+      ctx.fillRect(-ps.width/3, -ps.height/2 - ps.width/4 - ps.height/6, ps.width*2/3, ps.height/6);
+      
+      // Draw axe - Dont reset the scale here to keep player flipping
+      const axe = axeSprites[player.currentAxe.level - 1];
+      ctx.save();
+      
+      // Calculate axe position based on player facing direction
+      const axeOffsetX = playerFacingLeft ? -ps.width/3 : ps.width/3;
+      const axeOffsetY = ps.height/8; // Mierne posunutie sekery nadol
+      ctx.translate(axeOffsetX, axeOffsetY); // Move to axe pivot point
+      
+      // Základná rotácia sekery (drží ju pripravenú na sekanie)
+      ctx.rotate(-Math.PI / 2);  // Drží sekeru kolmo k zemi
+      
+      if (chopping !== null) {
+        const chopProgress = (performance.now() - chopStart) / player.currentAxe.chopTime;
+        // Upravená animácia - pohyb len smerom dole a späť (90 stupňov)
+        const chopAngle = Math.sin(chopProgress * Math.PI) * Math.PI / 2;
+        ctx.rotate(chopAngle);
+      }
+      
+      // Handle
+      ctx.fillStyle = axe.handleColor;
+      ctx.fillRect(-axe.handleWidth/2, 0, axe.handleWidth, -axe.handleLength);
+      
+      // Blade - realistická sekera, každý level lepší
+      ctx.fillStyle = axe.bladeColor;
+      
+      // Kovové časti na rukoväti (pre lepšie sekery)
+      if (player.currentAxe.level >= 2) {
+        ctx.fillStyle = '#A8A8A8';
+        ctx.fillRect(-axe.handleWidth*1.2, -2, axe.handleWidth*2.4, 4);
+        
+        if (player.currentAxe.level >= 3) {
+          ctx.fillRect(-axe.handleWidth*1.2, -axe.handleLength/2, axe.handleWidth*2.4, 3);
+        }
+      }
+      
+      // Hlavná časť čepele
+      ctx.fillStyle = axe.bladeColor;
+      ctx.beginPath();
+      // Začiatok pri rukoväti - pripojenie čepele k rukoväti
+      ctx.moveTo(-axe.handleWidth*1.2, -axe.handleLength + axe.bladeHeight/8);
+      // Horná hrana čepele
+      ctx.lineTo(axe.bladeWidth/2, -axe.handleLength - axe.bladeHeight/3);
+      // Zaoblený koniec čepele
+      ctx.quadraticCurveTo(
+        axe.bladeWidth, -axe.handleLength,
+        axe.bladeWidth/2, -axe.handleLength + axe.bladeHeight/3
+      );
+      // Spodná hrana čepele späť k rukoväti
+      ctx.lineTo(-axe.handleWidth*1.2, -axe.handleLength - axe.bladeHeight/8);
+      ctx.closePath();
+      ctx.fill();
+      
+      // Ostrie sekery
+      ctx.fillStyle = axe.edgeColor;
+      ctx.beginPath();
+      // Ostrejšie pre vyššie levely
+      const sharpnessFactor = 0.8 + (player.currentAxe.level * 0.05);
+      ctx.moveTo(axe.bladeWidth/2, -axe.handleLength - axe.bladeHeight/3);
+      // Tenšia krivka pre ostrie - ostrejšie pre vyššie úrovne
+      ctx.quadraticCurveTo(
+        axe.bladeWidth*sharpnessFactor, -axe.handleLength,
+        axe.bladeWidth/2, -axe.handleLength + axe.bladeHeight/3
+      );
+      ctx.lineTo(axe.bladeWidth/2 - axe.edgeWidth, -axe.handleLength + axe.bladeHeight/3.5);
+      ctx.quadraticCurveTo(
+        axe.bladeWidth*0.7, -axe.handleLength,
+        axe.bladeWidth/2 - axe.edgeWidth, -axe.handleLength - axe.bladeHeight/3.5
+      );
+      ctx.closePath();
+      ctx.fill();
+      
+      // Efekt lesku pre vyššie úrovne
+      if (axe.shinyEffect) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.beginPath();
+        ctx.moveTo(axe.bladeWidth/4, -axe.handleLength - axe.bladeHeight/4);
+        ctx.lineTo(axe.bladeWidth/2, -axe.handleLength);
+        ctx.lineTo(axe.bladeWidth/4, -axe.handleLength + axe.bladeHeight/4);
+        ctx.closePath();
+        ctx.fill();
+      }
+      
+      // Kovový klin čepele - pre realistický vzhľad
+      ctx.fillStyle = axe.bladeColor;
+      ctx.beginPath();
+      ctx.moveTo(-axe.handleWidth*1.4, -axe.handleLength - axe.bladeHeight/8);
+      ctx.lineTo(-axe.handleWidth*0.8, -axe.handleLength - axe.bladeHeight/3);
+      ctx.lineTo(-axe.handleWidth*0.8, -axe.handleLength + axe.bladeHeight/3);
+      ctx.lineTo(-axe.handleWidth*1.4, -axe.handleLength + axe.bladeHeight/8);
+      ctx.closePath();
+      ctx.fill();
+      
+      // Add glow for level 4 axe
+      if (axe.glowColor) {
+        // Fancy glowing outline
+        ctx.globalAlpha = 0.6 + Math.sin(performance.now() / 400) * 0.3;
+        ctx.strokeStyle = axe.glowColor;
+        ctx.lineWidth = 3;
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(-axe.handleWidth*1.2, 0);
+        ctx.lineTo(-axe.handleWidth*1.2, -axe.handleLength - axe.bladeHeight/6);
+        ctx.lineTo(axe.bladeWidth/2, -axe.handleLength - axe.bladeHeight/2);
+        ctx.lineTo(axe.bladeWidth, -axe.handleLength);
+        ctx.lineTo(axe.bladeWidth/2, -axe.handleLength + axe.bladeHeight/2);
+        ctx.lineTo(-axe.handleWidth*1.2, -axe.handleLength + axe.bladeHeight/6);
+        ctx.closePath();
+        ctx.stroke();
+        
+        // Glowing particles
+        const numParticles = 3;
+        for (let i = 0; i < numParticles; i++) {
+          const angle = performance.now() / 1000 + i * (Math.PI * 2 / numParticles);
+          const x = axe.bladeWidth/2 + Math.cos(angle) * (axe.bladeWidth/4);
+          const y = -axe.handleLength + Math.sin(angle) * (axe.bladeHeight/4);
+          
+          ctx.fillStyle = axe.glowColor;
+          ctx.beginPath();
+          ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        
+        ctx.globalAlpha = 1;
+      }
+      
+      ctx.restore();
+      ctx.restore();
+    }
+
+    function updateShop() {
+      const shopDiv = document.getElementById('axe-list');
+      shopDiv.innerHTML = '';
+      
+      for (let i = 0; i < axes.length; i++) {
+        const axe = axes[i];
+        if (!axe.owned && (i === 0 || axes[i-1].owned)) {
+          const axeDiv = document.createElement('div');
+          axeDiv.className = 'axe-option';
+          axeDiv.innerHTML = `
+            <div class="axe-info">
+              <strong>Level ${axe.level} Axe</strong><br>
+              Chop Time: ${axe.chopTime/1000}s<br>
+              Range: ${Math.round((axe.range - treeSize)/10)*10}
+            </div>
+            <button onclick="buyAxe(${i})" ${wood >= axe.price ? '' : 'disabled'}>
+              Buy (${axe.price} wood)
+            </button>
+          `;
+          shopDiv.appendChild(axeDiv);
+        }
+      }
+    }
+
+    function toggleShop(show) {
+      const shop = document.getElementById('shop');
+      shop.style.display = show ? 'block' : 'none';
+      if (show) {
+        updateShop();
+      }
+    }
+
+    function buyAxe(index) {
+      const axe = axes[index];
+      if (wood >= axe.price && !axe.owned) {
+        wood -= axe.price;
+        axe.owned = true;
+        player.currentAxe = axe;
+        inventoryDiv.textContent = `Wood: ${wood}`;
+        updateShop();
+      }
+    }
+
+    function isNearSmithy() {
+      const dx = player.x - smithy.x;
+      const dy = player.y - smithy.y;
+      return Math.hypot(dx, dy) < smithy.size;
+    }
+
+    let lastTime = 0;
+    function gameLoop(time) {
+      const deltaTime = time - lastTime;
+      lastTime = time;
+      update(deltaTime);
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+    requestAnimationFrame(gameLoop);
+
+    let isChopping = false;
+    let chopStartTime = 0;
+    let axeAngle = 0;
+
+    function updateAxeAnimation() {
+      if (isChopping) {
+        const chopDuration = 500 / player.currentAxe.chopTime; // Total duration of chop animation in ms
+        const elapsed = Date.now() - chopStartTime;
+        const progress = Math.min(1, elapsed / chopDuration);
+        
+        // Use sine function for smooth acceleration and deceleration
+        const swingProgress = Math.sin(progress * Math.PI);
+        
+        // Calculate swing angle (90 degrees = PI/2 radians)
+        // Start at -PI/4 (-45 degrees) and swing down to PI/4 (45 degrees)
+        axeAngle = -Math.PI/4 + (Math.PI/2 * swingProgress);
+        
+        if (progress >= 1) {
+          isChopping = false;
+          axeAngle = -Math.PI/4; // Reset to starting position
+        }
+      }
+    }
+  </script>
+</body>
+</html>
